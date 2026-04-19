@@ -6508,17 +6508,43 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
         return sbClient;
       }
 
+      function validateSupabaseCfg(url, anonKey) {
+        const u = String(url || "").trim();
+        const k = String(anonKey || "").trim();
+        if (!u || !k) return { ok: false, message: "请填写 Project URL 与 anon public key。" };
+        if (!/^https:\/\/.+/i.test(u)) return { ok: false, message: "Project URL 必须以 https:// 开头。" };
+        if (!/\.supabase\.co$/i.test(u)) return { ok: false, message: "Project URL 通常以 .supabase.co 结尾，请检查是否粘贴正确。" };
+        if (!/^eyJ/i.test(k)) return { ok: false, message: "anon public key 通常以 eyJ 开头（JWT），请检查是否粘贴正确。" };
+        return { ok: true, url: u, anonKey: k };
+      }
+
+      function formatAuthException(e) {
+        const msg = (e && e.message) || String(e || "");
+        if (msg.includes("Unexpected end of JSON input")) {
+          return "请求返回了空响应。请检查：1) Supabase 的 Project URL/anon key 是否填错；2) Supabase 项目是否暂停；3) 是否已在 Supabase SQL Editor 执行建表脚本（profiles/groups 等表必须存在）；4) 网络是否拦截 supabase.co。";
+        }
+        if (msg.includes("Failed to fetch")) {
+          return "网络请求失败。请检查本地网络是否能访问 supabase.co（或是否被拦截/代理影响）。";
+        }
+        return msg || "发生未知错误。";
+      }
+
       async function refreshAuthState() {
         const sb = getSupabaseClient();
         authUser = null;
         authProfile = null;
         if (!sb) return;
-        const { data } = await sb.auth.getSession();
-        const session = data ? data.session : null;
-        authUser = session && session.user ? session.user : null;
-        if (!authUser) return;
-        const { data: profile } = await sb.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
-        authProfile = profile || null;
+        try {
+          const { data } = await sb.auth.getSession();
+          const session = data ? data.session : null;
+          authUser = session && session.user ? session.user : null;
+          if (!authUser) return;
+          const { data: profile } = await sb.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
+          authProfile = profile || null;
+        } catch {
+          authUser = null;
+          authProfile = null;
+        }
       }
 
       function getUserLabel(profile) {
@@ -7470,116 +7496,133 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
         ui.btnSbSave.addEventListener("click", async () => {
           const url = String(ui.sbUrl.value || "").trim();
           const anonKey = String(ui.sbAnonKey.value || "").trim();
-          if (!url || !anonKey) return showAuthHint("请填写 Project URL 与 anon public key。");
-          saveSupabaseCfg({ url, anonKey });
+          const v = validateSupabaseCfg(url, anonKey);
+          if (!v.ok) return showAuthHint(v.message);
+          saveSupabaseCfg({ url: v.url, anonKey: v.anonKey });
           sbClient = null;
-          await refreshAuthState();
+          try {
+            await refreshAuthState();
+          } catch (e) {
+            return showAuthHint(formatAuthException(e));
+          }
           ui.authCloudCfg.style.display = isSupabaseReady() ? "none" : "block";
           ui.authSetup.style.display = isSupabaseReady() ? "block" : "none";
           showAuthHint(isSupabaseReady() ? "已连接，请继续登录/注册或初始化超级管理员。" : "连接失败：请检查配置。");
         });
 
         ui.btnSetupCreate.addEventListener("click", async () => {
-          if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
-          const displayName = String(ui.setupDisplayName.value || "").trim();
-          const email = String(ui.setupEmail.value || "").trim();
-          const username = String(ui.setupUsername.value || "").trim();
-          const p1 = String(ui.setupPassword.value || "");
-          const p2 = String(ui.setupPassword2.value || "");
-          if (!displayName) return showAuthHint("请输入姓名。");
-          if (!email || !email.includes("@")) return showAuthHint("请输入正确的邮箱。");
-          if (!p1 || p1.length < 8) return showAuthHint("密码长度至少 8 位。");
-          if (p1 !== p2) return showAuthHint("两次输入的密码不一致。");
-          const sb = getSupabaseClient();
-          if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
-          const { error: signUpErr } = await sb.auth.signUp({ email, password: p1 });
-          if (signUpErr) return showAuthHint(signUpErr.message || "注册失败。");
-          const { error: signInErr } = await sb.auth.signInWithPassword({ email, password: p1 });
-          if (signInErr) return showAuthHint(signInErr.message || "登录失败。");
-          await refreshAuthState();
-          if (!authUser) return showAuthHint("登录状态异常。");
-          const { error: profErr } = await sb.from("profiles").insert({
-            id: authUser.id,
-            username: username || email,
-            display_name: displayName,
-            role: "super_admin",
-            status: "active",
-            group_id: null,
-          });
-          if (profErr) return showAuthHint(profErr.message || "创建超级管理员失败（可能已存在超级管理员）。");
-          await refreshAuthState();
-          syncUserUi();
-          showAuthHint("");
-          setLocked(false);
-          showScreen("home");
+          try {
+            if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
+            const displayName = String(ui.setupDisplayName.value || "").trim();
+            const email = String(ui.setupEmail.value || "").trim();
+            const username = String(ui.setupUsername.value || "").trim();
+            const p1 = String(ui.setupPassword.value || "");
+            const p2 = String(ui.setupPassword2.value || "");
+            if (!displayName) return showAuthHint("请输入姓名。");
+            if (!email || !email.includes("@")) return showAuthHint("请输入正确的邮箱。");
+            if (!p1 || p1.length < 8) return showAuthHint("密码长度至少 8 位。");
+            if (p1 !== p2) return showAuthHint("两次输入的密码不一致。");
+            const sb = getSupabaseClient();
+            if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
+            const { error: signUpErr } = await sb.auth.signUp({ email, password: p1 });
+            if (signUpErr) return showAuthHint(signUpErr.message || "注册失败。");
+            const { error: signInErr } = await sb.auth.signInWithPassword({ email, password: p1 });
+            if (signInErr) return showAuthHint(signInErr.message || "登录失败。");
+            await refreshAuthState();
+            if (!authUser) return showAuthHint("登录状态异常。");
+            const { error: profErr } = await sb.from("profiles").insert({
+              id: authUser.id,
+              username: username || email,
+              display_name: displayName,
+              role: "super_admin",
+              status: "active",
+              group_id: null,
+            });
+            if (profErr) return showAuthHint(profErr.message || "创建超级管理员失败（可能已存在超级管理员）。");
+            await refreshAuthState();
+            syncUserUi();
+            showAuthHint("");
+            setLocked(false);
+            showScreen("home");
+          } catch (e) {
+            showAuthHint(formatAuthException(e));
+          }
         });
 
         ui.btnLoginSubmit.addEventListener("click", async () => {
-          if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
-          const email = String(ui.loginEmail.value || "").trim();
-          const password = String(ui.loginPassword.value || "");
-          if (!email || !password) return showAuthHint("请输入邮箱与密码。");
-          const sb = getSupabaseClient();
-          if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
-          const { error } = await sb.auth.signInWithPassword({ email, password });
-          if (error) return showAuthHint(error.message || "登录失败。");
-          await refreshAuthState();
-          syncUserUi();
-          if (!authProfile) {
-            await sb.auth.signOut();
-            authUser = null;
-            authProfile = null;
+          try {
+            if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
+            const email = String(ui.loginEmail.value || "").trim();
+            const password = String(ui.loginPassword.value || "");
+            if (!email || !password) return showAuthHint("请输入邮箱与密码。");
+            const sb = getSupabaseClient();
+            if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
+            const { error } = await sb.auth.signInWithPassword({ email, password });
+            if (error) return showAuthHint(error.message || "登录失败。");
+            await refreshAuthState();
             syncUserUi();
-            return showAuthHint("该账号尚未建立档案，请联系超级管理员处理或重新注册。");
+            if (!authProfile) {
+              await sb.auth.signOut();
+              authUser = null;
+              authProfile = null;
+              syncUserUi();
+              return showAuthHint("该账号尚未建立档案，请联系超级管理员处理或重新注册。");
+            }
+            if (authProfile.status !== "active") {
+              await sb.auth.signOut();
+              authUser = null;
+              authProfile = null;
+              syncUserUi();
+              return showAuthHint(authProfile.status === "pending" ? "账号待审批，暂不可使用。" : "账号已被禁用。");
+            }
+            showAuthHint("");
+            setLocked(false);
+            showScreen("home");
+          } catch (e) {
+            showAuthHint(formatAuthException(e));
           }
-          if (authProfile.status !== "active") {
-            await sb.auth.signOut();
-            authUser = null;
-            authProfile = null;
-            syncUserUi();
-            return showAuthHint(authProfile.status === "pending" ? "账号待审批，暂不可使用。" : "账号已被禁用。");
-          }
-          showAuthHint("");
-          setLocked(false);
-          showScreen("home");
         });
 
         ui.btnRegisterSubmit.addEventListener("click", async () => {
-          if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
-          const displayName = String(ui.regDisplayName.value || "").trim();
-          const email = String(ui.regEmail.value || "").trim();
-          const username = String(ui.regUsername.value || "").trim();
-          const password = String(ui.regPassword.value || "");
-          if (!displayName) return showAuthHint("请输入姓名。");
-          if (!email || !email.includes("@")) return showAuthHint("请输入正确的邮箱。");
-          if (!password || password.length < 8) return showAuthHint("密码长度至少 8 位。");
-          const sb = getSupabaseClient();
-          if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
-          const { error: signUpErr } = await sb.auth.signUp({ email, password });
-          if (signUpErr) return showAuthHint(signUpErr.message || "注册失败。");
-          const { error: signInErr } = await sb.auth.signInWithPassword({ email, password });
-          if (signInErr) return showAuthHint(signInErr.message || "登录失败。");
-          await refreshAuthState();
-          if (!authUser) return showAuthHint("登录状态异常。");
-          const { error: profErr } = await sb.from("profiles").insert({
-            id: authUser.id,
-            username: username || email,
-            display_name: displayName,
-            role: "user",
-            status: "pending",
-            group_id: null,
-          });
-          if (profErr) return showAuthHint(profErr.message || "提交注册申请失败。");
-          await sb.auth.signOut();
-          authUser = null;
-          authProfile = null;
-          syncUserUi();
-          setLocked(true);
-          showAuthHint("已提交注册申请，请联系超级管理员审批。");
-          ui.regDisplayName.value = "";
-          ui.regEmail.value = "";
-          ui.regUsername.value = "";
-          ui.regPassword.value = "";
+          try {
+            if (!isSupabaseReady()) return showAuthHint("请先完成 Supabase 云端配置。");
+            const displayName = String(ui.regDisplayName.value || "").trim();
+            const email = String(ui.regEmail.value || "").trim();
+            const username = String(ui.regUsername.value || "").trim();
+            const password = String(ui.regPassword.value || "");
+            if (!displayName) return showAuthHint("请输入姓名。");
+            if (!email || !email.includes("@")) return showAuthHint("请输入正确的邮箱。");
+            if (!password || password.length < 8) return showAuthHint("密码长度至少 8 位。");
+            const sb = getSupabaseClient();
+            if (!sb) return showAuthHint("连接失败：请检查 Supabase 配置。");
+            const { error: signUpErr } = await sb.auth.signUp({ email, password });
+            if (signUpErr) return showAuthHint(signUpErr.message || "注册失败。");
+            const { error: signInErr } = await sb.auth.signInWithPassword({ email, password });
+            if (signInErr) return showAuthHint(signInErr.message || "登录失败。");
+            await refreshAuthState();
+            if (!authUser) return showAuthHint("登录状态异常。");
+            const { error: profErr } = await sb.from("profiles").insert({
+              id: authUser.id,
+              username: username || email,
+              display_name: displayName,
+              role: "user",
+              status: "pending",
+              group_id: null,
+            });
+            if (profErr) return showAuthHint(profErr.message || "提交注册申请失败。");
+            await sb.auth.signOut();
+            authUser = null;
+            authProfile = null;
+            syncUserUi();
+            setLocked(true);
+            showAuthHint("已提交注册申请，请联系超级管理员审批。");
+            ui.regDisplayName.value = "";
+            ui.regEmail.value = "";
+            ui.regUsername.value = "";
+            ui.regPassword.value = "";
+          } catch (e) {
+            showAuthHint(formatAuthException(e));
+          }
         });
 
         ui.btnStart.addEventListener("click", async () => startNewExam());
