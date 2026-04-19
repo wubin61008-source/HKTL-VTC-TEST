@@ -3655,6 +3655,8 @@ D. RCD本身故障
       const STORAGE_KEY_PREFIX = "hktl_vr2_0_exam_state";
       const STORAGE_LAST_RESULT_KEY_PREFIX = "hktl_vr2_0_last_result";
       const SUPABASE_CFG_KEY = "hktl_vr2_0_supabase_cfg";
+      const DEFAULT_SUPABASE_URL = "https://xutdciwnsfzxyjrkwdod.supabase.co";
+      const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_sGwpEcMZthd6aaos44PqQQ_MUS7Igej";
       const EXAM_DURATION_SEC = 75 * 60;
       const PASS_SCORE = 60;
       const DEFAULT_EXAM_QUESTION_COUNT = 100;
@@ -6483,11 +6485,21 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
       function loadSupabaseCfg() {
         try {
           const raw = localStorage.getItem(SUPABASE_CFG_KEY);
-          if (!raw) return null;
+          if (!raw) {
+            if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) {
+              return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY };
+            }
+            return null;
+          }
           const parsed = JSON.parse(raw);
-          if (!parsed || !parsed.url || !parsed.anonKey) return null;
+          if (!parsed) return null;
+          if (parsed.disabled) return null;
+          if (!parsed.url || !parsed.anonKey) return null;
           return parsed;
         } catch {
+          if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) {
+            return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY };
+          }
           return null;
         }
       }
@@ -7518,7 +7530,7 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
           authUser = null;
           authProfile = null;
           sbClient = null;
-          localStorage.removeItem(SUPABASE_CFG_KEY);
+          localStorage.setItem(SUPABASE_CFG_KEY, JSON.stringify({ disabled: true }));
           ui.sbUrl.value = "";
           ui.sbAnonKey.value = "";
           ui.authCloudCfg.style.display = "block";
