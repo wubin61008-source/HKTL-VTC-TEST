@@ -794,6 +794,8 @@
             <h2 id="authTitle" style="margin: 0; font-size: 18px; letter-spacing: 0.2px">账号</h2>
             <div class="top-actions">
               <button class="btn" id="btnAuthBackHome" type="button">返回首页</button>
+              <button class="btn" id="btnShowCloudCfg" type="button">云端配置</button>
+              <button class="btn danger" id="btnClearCloudCfg" type="button">清除配置</button>
             </div>
           </div>
           <div class="divider"></div>
@@ -6514,7 +6516,10 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
         if (!u || !k) return { ok: false, message: "请填写 Project URL 与 anon public key。" };
         if (!/^https:\/\/.+/i.test(u)) return { ok: false, message: "Project URL 必须以 https:// 开头。" };
         if (!/\.supabase\.co$/i.test(u)) return { ok: false, message: "Project URL 通常以 .supabase.co 结尾，请检查是否粘贴正确。" };
-        if (!/^eyJ/i.test(k)) return { ok: false, message: "anon public key 通常以 eyJ 开头（JWT），请检查是否粘贴正确。" };
+        const looksLikeAnonJwt = /^eyJ/i.test(k);
+        const looksLikePublishableKey = /^sb_publishable_/i.test(k) || /^sbp_/i.test(k);
+        if (!looksLikeAnonJwt && !looksLikePublishableKey)
+          return { ok: false, message: "请填写 Supabase 的可发布密钥（anon public key / publishable key），不要填 secret/service_role。" };
         return { ok: true, url: u, anonKey: k };
       }
 
@@ -6762,6 +6767,8 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
         btnReviewBack: byId("btnReviewBack"),
         btnReviewRestart: byId("btnReviewRestart"),
         btnAuthBackHome: byId("btnAuthBackHome"),
+        btnShowCloudCfg: byId("btnShowCloudCfg"),
+        btnClearCloudCfg: byId("btnClearCloudCfg"),
         authTitle: byId("authTitle"),
         authHint: byId("authHint"),
         authCloudCfg: byId("authCloudCfg"),
@@ -7492,6 +7499,35 @@ WR1 表格与合规管理法定要求（占比 10%，10 题）
           showScreen("home");
         });
         ui.btnAdminBack.addEventListener("click", () => showScreen("home"));
+
+        ui.btnShowCloudCfg.addEventListener("click", () => {
+          const cfg = loadSupabaseCfg();
+          if (cfg) {
+            ui.sbUrl.value = cfg.url;
+            ui.sbAnonKey.value = cfg.anonKey;
+          }
+          ui.authCloudCfg.style.display = "block";
+          ui.authCloudCfg.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+
+        ui.btnClearCloudCfg.addEventListener("click", async () => {
+          const ok = window.confirm("确认清除 Supabase 配置？清除后需要重新填写 Project URL 与 anon key。");
+          if (!ok) return;
+          const sb = getSupabaseClient();
+          if (sb) await sb.auth.signOut();
+          authUser = null;
+          authProfile = null;
+          sbClient = null;
+          localStorage.removeItem(SUPABASE_CFG_KEY);
+          ui.sbUrl.value = "";
+          ui.sbAnonKey.value = "";
+          ui.authCloudCfg.style.display = "block";
+          ui.authSetup.style.display = "none";
+          setLocked(true);
+          syncUserUi();
+          showAuthHint("已清除配置，请重新填写并保存。");
+          showScreen("auth");
+        });
 
         ui.btnSbSave.addEventListener("click", async () => {
           const url = String(ui.sbUrl.value || "").trim();
